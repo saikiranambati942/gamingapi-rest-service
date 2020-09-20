@@ -1,3 +1,6 @@
+# github.com/dgrijalva/jwt-go v3.1.0+incompatible
+## explicit
+github.com/dgrijalva/jwt-go
 # github.com/gomodule/redigo v1.8.2
 ## explicit
 github.com/gomodule/redigo/redis
