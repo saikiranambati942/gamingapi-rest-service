@@ -4,3 +4,7 @@ github.com/dgrijalva/jwt-go
 # github.com/gomodule/redigo v1.8.2
 ## explicit
 github.com/gomodule/redigo/redis
+# golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a
+## explicit
+golang.org/x/crypto/bcrypt
+golang.org/x/crypto/blowfish

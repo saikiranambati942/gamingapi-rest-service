@@ -11,6 +11,7 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gomodule/redigo/redis"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var pool *redis.Pool
@@ -26,9 +27,7 @@ func init() {
 }
 
 func main() {
-	//Conn := pool.Get()
-	//fmt.Println(Conn.Do("DEL", "user"))
-
+	http.HandleFunc("/client/renew", RenewToken)
 	http.HandleFunc("/client/welcome", Welcome)
 	http.HandleFunc("/client/register", Register)
 	http.HandleFunc("/client/login", Login)
@@ -68,12 +67,15 @@ func Register(w http.ResponseWriter, req *http.Request) {
 	}
 	// store the data in the database
 	conn := pool.Get()
-	_, err = conn.Do("SET", p.Username, p.Password)
+	defer conn.Close()
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(p.Password), 8)
+	_, err = conn.Do("SET", p.Username, string(hashedPassword))
 	if err != nil {
 		io.WriteString(w, "Registration Failed, Please try again")
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, "Registered successfully")
 }
 
 //Login function is used to login a player who is registered
@@ -82,19 +84,21 @@ func Login(w http.ResponseWriter, req *http.Request) {
 	err := json.NewDecoder(req.Body).Decode(&p)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 	// get the userdata from database if not register the user
 	conn := pool.Get()
+	defer conn.Close()
 	reply, err := conn.Do("GET", p.Username)
 	if err != nil {
 		io.WriteString(w, "user doesn't exist")
 	}
-	var y []uint8
+	var storedPassword string
 	x, ok := reply.([]uint8)
 	if ok {
-		y = x
+		storedPassword = string(x)
 	}
-	if p.Password != string(y) {
+	if err = bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(p.Password)); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -105,7 +109,6 @@ func Login(w http.ResponseWriter, req *http.Request) {
 			ExpiresAt: expirationTime.Unix(),
 		},
 	}
-
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
@@ -119,10 +122,9 @@ func Login(w http.ResponseWriter, req *http.Request) {
 	})
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, "login sucessful")
-
 }
 
-// Welcome function
+// Welcome function is to welcome the authorised/valid user who already logged in used
 func Welcome(w http.ResponseWriter, req *http.Request) {
 	cookie, err := req.Cookie("token")
 	if err != nil {
@@ -133,7 +135,6 @@ func Welcome(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
 	tokenString := cookie.Value
 	claims := &Claims{}
 	keyFunc := func(token *jwt.Token) (interface{}, error) {
@@ -153,4 +154,52 @@ func Welcome(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Write([]byte(fmt.Sprintf("Welcome %s!", claims.Username)))
+}
+
+//RenewToken function is to renew jwt token
+func RenewToken(w http.ResponseWriter, req *http.Request) {
+	cookie, err := req.Cookie("token")
+	if err != nil {
+		if err == http.ErrNoCookie {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	tokenString := cookie.Value
+	claims := &Claims{}
+	keyFunc := func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	}
+	token, err := jwt.ParseWithClaims(tokenString, claims, keyFunc)
+	if err != nil {
+		if err == jwt.ErrSignatureInvalid {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if time.Unix(claims.ExpiresAt, 0).Sub(time.Now()) > 30*time.Second {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	expirationTime := time.Now().Add(5 * time.Minute)
+	claims.ExpiresAt = expirationTime.Unix()
+	tkn := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tknStr, err := tkn.SignedString(jwtKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:    "token",
+		Value:   tknStr,
+		Expires: expirationTime,
+	})
+	io.WriteString(w, "token renewed successfully")
 }
